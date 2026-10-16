@@ -22,7 +22,8 @@ def app():
     ("/Applications/VLC's copy.app", "/Applications/VLC's copy.app"),
 ])
 def test_normalize(text, expected):
-    assert vlc_picker.normalize_vlc_path(text) == expected
+    actual = vlc_picker.normalize_vlc_path(text)
+    assert actual == (str(Path(expected)) if expected else "")
 
 
 def test_unknown_home_name_remains_for_validation(monkeypatch):
@@ -37,22 +38,22 @@ def test_validate_explicit_path_before_accepting(app, monkeypatch):
     monkeypatch.setattr(vlc_picker, "locate", lambda path: received.append(path) or SimpleNamespace(root=Path("/valid/VLC.app")))
     dialog = vlc_picker._VlcPicker(None, ' "/valid/VLC.app" ')
     dialog.accept()
-    assert received == ["/valid/VLC.app"]
+    assert [Path(path) for path in received] == [Path("/valid/VLC.app")]
     assert dialog.result() == QDialog.DialogCode.Accepted
-    assert dialog.selected_path == "/valid/VLC.app"
+    assert Path(dialog.selected_path) == Path("/valid/VLC.app")
 
 
 @pytest.mark.parametrize("code", ["invalid_path", "architecture", "plugins"])
 def test_invalid_selection_does_not_accept_or_change_initial(app, monkeypatch, code):
     def fail(path):
-        assert path == "/bad/VLC.app"
+        assert Path(path) == Path("/bad/VLC.app")
         raise VlcError(code, "校验失败")
     monkeypatch.setattr(vlc_picker, "locate", fail)
     dialog = vlc_picker._VlcPicker(None, "/bad/VLC.app")
     dialog.accept()
     assert dialog.result() != QDialog.DialogCode.Accepted
     assert dialog.selected_path is None
-    assert dialog.path.text() == "/bad/VLC.app"
+    assert Path(dialog.path.text()) == Path("/bad/VLC.app")
     assert code in dialog.error.text()
 
 
