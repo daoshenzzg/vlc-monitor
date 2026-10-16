@@ -48,7 +48,7 @@ jobs:
       - name: Install Qt system libraries for headless tests
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y libegl1 libopengl0
+          sudo apt-get install --no-install-recommends -y libegl1 libopengl0 libpulse0
       - name: Core tests (PRs never receive publishing credentials)
         env:
           QT_QPA_PLATFORM: offscreen
