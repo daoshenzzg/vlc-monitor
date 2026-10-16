@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vlc-monitor"
+version = "0.4.0"
+description = "Single-session desktop video monitoring with external VLC"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "PySide6==6.8.3",
+  "qrcode==8.2",
+  "python-vlc==3.0.21203",
+  "numpy==2.2.6",
+  "opencv-python-headless==4.11.0.86",
+]
+
+[project.optional-dependencies]
+dev = ["pytest==8.4.2", "pyinstaller==6.16.0", "psutil==7.1.0"]
+
+[project.scripts]
+vlc-monitor = "vlc_monitor.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+vlc_monitor = ["assets/*.wav"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

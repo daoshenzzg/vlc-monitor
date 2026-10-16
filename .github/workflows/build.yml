@@ -1,0 +1,160 @@
+name: Verified Native Delivery
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: delivery-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+env:
+  UV_PYTHON: '3.12.13'
+  UV_PYTHON_PREFERENCE: only-managed
+jobs:
+  source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
+        with:
+          version: '0.12.18'
+          enable-cache: false
+      - name: Install exact managed Python and locked dependencies
+        run: |
+          uv python install 3.12.13
+          uv sync --locked --extra dev
+      - name: Check versions and tag
+        id: version
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          version=$(uv run --no-sync python tools/delivery.py version)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ "$REF_TYPE" = tag ]; then test "$REF_NAME" = "v$version"; fi
+      - name: Audit controlled source and scan secrets (redacted)
+        run: |
+          uv run --no-sync python tools/delivery.py audit
+          uv run --no-sync python tools/delivery.py scan
+      - name: Core tests (PRs never receive publishing credentials)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: uv run --no-sync pytest -q
+      - name: Create source exactly once
+        if: github.event_name != 'pull_request'
+        run: uv run --no-sync python packaging/source_archive.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: github.event_name != 'pull_request'
+        with:
+          name: source-${{ github.run_id }}
+          path: |
+            dist/VLCMonitor-${{ steps.version.outputs.version }}-source.zip
+            dist/SHA256SUMS-${{ steps.version.outputs.version }}-source.txt
+          if-no-files-found: error
+          retention-days: 14
+          # Stable per-run names let failed-job retries reuse successful upstream artifacts.
+          overwrite: true
+  native:
+    if: github.event_name != 'pull_request'
+    needs: source
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: macos-arm64
+          - runner: windows-2022
+            target: windows-x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
+        with:
+          version: '0.12.18'
+          enable-cache: false
+      - name: Install exact Python and locked dependencies
+        shell: pwsh
+        run: |
+          uv python install 3.12.13
+          if ($LASTEXITCODE -ne 0) { throw 'Exact Python unavailable' }
+          uv sync --locked --extra dev
+          if ($LASTEXITCODE -ne 0) { throw 'Locked sync failed' }
+      - name: Verify native runner and interpreter
+        env:
+          EXPECTED_TARGET: ${{ matrix.target }}
+        shell: pwsh
+        run: |
+          uv run --no-sync python tools/runner_check.py
+          if ($LASTEXITCODE -ne 0) { throw 'Runner architecture/version mismatch' }
+      - name: Native core tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        shell: pwsh
+        run: |
+          uv run --no-sync pytest -q
+          if ($LASTEXITCODE -ne 0) { throw 'Core tests failed' }
+      - name: Build macOS ARM64
+        if: runner.os == 'macOS'
+        run: sh packaging/build-macos.sh
+      - name: Build Windows x64
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./packaging/build-windows.ps1
+      - name: Verify platform checksum
+        shell: pwsh
+        env:
+          APP_VERSION: ${{ needs.source.outputs.version }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          uv run --no-sync python tools/delivery.py verify-checksums "dist/SHA256SUMS-$env:APP_VERSION-$env:TARGET.txt" "VLCMonitor-$env:APP_VERSION-$env:TARGET-internal.zip"
+          if ($LASTEXITCODE -ne 0) { throw 'Checksum verification failed' }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ matrix.target }}-${{ github.run_id }}
+          path: |
+            dist/VLCMonitor-${{ needs.source.outputs.version }}-${{ matrix.target }}-internal.zip
+            dist/SHA256SUMS-${{ needs.source.outputs.version }}-${{ matrix.target }}.txt
+          if-no-files-found: error
+          retention-days: 14
+          # Stable per-run names let failed-job retries reuse successful upstream artifacts.
+          overwrite: true
+  release:
+    if: startsWith(github.ref, 'refs/tags/v') && github.event_name == 'push'
+    needs: [source, native]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: source-${{ github.run_id }}
+          path: dist
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: macos-arm64-${{ github.run_id }}
+          path: dist
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: windows-x64-${{ github.run_id }}
+          path: dist
+      - name: Verify all inputs and publish a new version only
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: python3 tools/release.py
