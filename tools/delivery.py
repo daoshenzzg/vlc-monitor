@@ -47,6 +47,8 @@ def source_files() -> list[Path]:
             continue
         if any(part in {".git", ".venv", ".uv-cache", "__pycache__", ".pytest_cache", "build", "dist", "tmp", ".firecrawl"} or part.endswith('.egg-info') for part in rel.parts):
             continue
+        if rel.name == '.DS_Store':
+            continue
         # Inspect links even when their target is missing or a directory.
         if path.is_symlink():
             raise ValueError(f"Symlink forbidden in source: {rel.as_posix()}")
